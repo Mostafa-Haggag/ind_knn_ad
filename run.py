@@ -28,6 +28,7 @@ def run_model(method: str, classes: List[str], backbone: str):
 
     for class_name in classes:
         if method == "spade":
+            # calling the method spade
             model = SPADE(
                 k=50,
                 backbone_name=backbone,
@@ -74,7 +75,19 @@ def run_model(method: str, classes: List[str], backbone: str):
 
 
 @click.command()
+# The @click.command() decorator is used to mark a function as a CLI command. T
+# his means that when you run the script
+# from the command line, this function will be invoked as the entry point for the command.
 @click.argument("method")
+# The @click.argument("method") line defines a positional argument named method.
+# Positional arguments are required and must be provided by the user when running the command.
+# In this case, method could be a string
+# representing a specific action or function you want to perform, like "train", "test", etc.
+### THIS PART IS OPTIONAL
+# This is part is optional
+# The @click.option decorators define optional parameters for the command.
+# Each option corresponds to a
+# flag or keyword argument that you can provide when running the command.
 @click.option(
     "--dataset", default="all", help="Dataset name, defaults to all datasets."
 )
@@ -85,11 +98,15 @@ def cli_interface(method: str, dataset: str, backbone: str):
     if dataset == "all":
         dataset = ALL_CLASSES
     else:
+        # definined what set of classes to use
         dataset = [dataset]
 
-    method = method.lower()
-    assert method in ALLOWED_METHODS, f"Select from {ALLOWED_METHODS}."
 
+    method = method.lower()# you need to tell me if we should use padim or spade
+    # or patch core
+    assert method in ALLOWED_METHODS, f"Select from {ALLOWED_METHODS}."
+    print(f"I am running this dataset for the method: {method} and for the dataset: {dataset} using"
+          f"backbone {backbone}")
     total_results = run_model(method, dataset, backbone)
 
     print_and_export_results(total_results, method)

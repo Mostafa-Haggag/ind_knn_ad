@@ -20,6 +20,17 @@ TQDM_PARAMS = {
 
 
 def get_tqdm_params():
+    '''
+    the function returen tqdm params  made of a dictionary
+    file contains sys.stdout which means that
+    sys.stdout is a standard output stream in Python, which means the progress bar
+    will be shown in the console or terminal where the script is being run.
+    However as for bar_format, I have to do the following
+    This key specifies a custom format for the progress bar.
+    bar_format is a string that defines how the progress bar will be formatted.
+
+    :return:
+    '''
     return TQDM_PARAMS
 
 

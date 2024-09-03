@@ -30,7 +30,7 @@ class KNNExtractor(torch.nn.Module):
         pool_last: bool = False,
     ):
         super().__init__()
-
+        # you create a feature extractor with
         self.feature_extractor = timm.create_model(
             backbone_name,
             out_indices=out_indices,
@@ -38,8 +38,13 @@ class KNNExtractor(torch.nn.Module):
             pretrained=True,
             exportable=True,
         )
+        ## kwargs is consider out_indices and features_only
+        ## outindices passed to be (1,2,3,-1)
+        # exportable Set layer config so that model is traceable / ONNX exportable
         for param in self.feature_extractor.parameters():
             param.requires_grad = False
+        # you have a feature extracture that iss able to evaluate
+        # no gradients
         self.feature_extractor.eval()
 
         self.pool = torch.nn.AdaptiveAvgPool2d(1) if pool_last else None
@@ -47,14 +52,23 @@ class KNNExtractor(torch.nn.Module):
         self.out_indices = out_indices
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # move features extractor to device
         self.feature_extractor = self.feature_extractor.to(self.device)
 
     def extract(self, x: Tensor):
+        '''
+        Function that move the features to the cpu and returns the
+        alll the feature maps and the last one
+        :param x:
+        :return:
+        '''
         with torch.no_grad():
             feature_maps = self.feature_extractor(x.to(self.device))
+        # loop over features map and set them to cpu
         feature_maps = [fmap.to("cpu") for fmap in feature_maps]
         if self.pool is not None:
             # spit into fmaps and z
+            # x is the last one
             return feature_maps[:-1], self.pool(feature_maps[-1])
         else:
             return feature_maps
@@ -73,9 +87,10 @@ class KNNExtractor(torch.nn.Module):
         pixel_labels = []
 
         for sample, mask, label in tqdm(test_dl, **get_tqdm_params()):
+            # This is the forward
             z_score, fmap = self.forward(sample)
 
-            image_preds.append(z_score.numpy())
+            image_preds.append(z_score.numpy()) # the last layer
             image_labels.append(label)
 
             pixel_preds.extend(fmap.flatten().numpy())
@@ -83,10 +98,11 @@ class KNNExtractor(torch.nn.Module):
 
         image_labels = np.stack(image_labels)
         image_preds = np.stack(image_preds)
-
+        #this is score oover labels
+        # what you are doing in here is very interesting
         image_rocauc = roc_auc_score(image_labels, image_preds)
         pixel_rocauc = roc_auc_score(pixel_labels, pixel_preds)
-
+        # we donot have the think in the paper of being anlomlious or not over teta variable
         return image_rocauc, pixel_rocauc
 
     def get_parameters(self, extra_params: dict = None) -> dict:
@@ -103,57 +119,107 @@ class SPADE(KNNExtractor):
         k: int = 5,
         backbone_name: str = "resnet18",
     ):
+        # this is spade using the network passed
         super().__init__(
             backbone_name=backbone_name,
             out_indices=(1, 2, 3, -1),
             pool_last=True,
         )
+        # setting pool last to True
         self.k = k
         self.image_size = 224
+        # in here we have the aveerage pooling
         self.z_lib = []
+        # in here we have the rest of the features
+        # you have a list of lists in here
+        # this is very important
         self.feature_maps = []
         self.threshold_z = None
         self.threshold_fmaps = None
         self.blur = NativeGaussianBlur()
 
     def fit(self, train_dl):
+        # you are creating in this step the gallery of the features
+        # you call the fit function at the first step
+        # looping for the training stepWe construct a gallery of features
+        # at all pixel locations of the K nearest neighbors
+        #
         for sample, _ in tqdm(train_dl, **get_tqdm_params()):
             feature_maps, z = self.extract(sample)
-
+            # this part after calling the child you get the Z
+            # featureamaps is the heat map
             # z vector
             self.z_lib.append(z)
+            # added the paramter after the pooling
 
             # feature maps
             if len(self.feature_maps) == 0:
+                # if we are in the first itersation
                 for fmap in feature_maps:
                     self.feature_maps.append([fmap])
             else:
                 for idx, fmap in enumerate(feature_maps):
                     self.feature_maps[idx].append(fmap)
-
+        # stacking very thing
         self.z_lib = torch.vstack(self.z_lib)
 
         for idx, fmap in enumerate(self.feature_maps):
             self.feature_maps[idx] = torch.vstack(fmap)
+        # i want to understand how the stacking really work
 
     def forward(self, sample):
+        # I need to understand what is difference between this and the fit function
+
         feature_maps, z = self.extract(sample)
-
+        # z is the averaged pooling
+        # first feature map [1,256,56,56]
+        # second feature map [1,512,28,28]
+        # third feature map [1,1024,14,14]
+        ##################################
+        # z has the shape of [1,2048,1,1]
+        # what does z_lib made of
+        # [320,2048,1,1] from z_lib because i have 320 feature map
+        # you subtract z in dim of 2048
+        # you calculating the norm in here
         distances = torch.linalg.norm(self.z_lib - z, dim=1)
+        # distances has the shape of [320,1,1] and this is the result
         values, indices = torch.topk(distances.squeeze(), self.k, largest=False)
-
+        #distances.squeeze() get you the array of size 320
+        # choose the best ones
+        # you get back the top 50 k choices
+        # values haas the shape of 50 you calculate the mean
         z_score = values.mean()
+        # you calculate the mean of all the values for all the distances
+
+        # you calcualte the mean which you call z_zore
 
         # Build the feature gallery out of the k nearest neighbours.
         # The authors migh have concatenated all features maps first, then check the minimum norm per pixel.
         # Here, we check for the minimum norm first, then concatenate (sum) in the final layer.
         scaled_s_map = torch.zeros(1, 1, self.image_size, self.image_size)
         for idx, fmap in enumerate(feature_maps):
+            # self.feature_maps[idx] This is the main ideaa
+            # [320, 256, 56, 56]
+            # indices are the 50 nearest neightbour  of this current test set
+            # training set
+            # you select the nearest featuremaps
+            # you choose based on channel 0
             nearest_fmaps = torch.index_select(self.feature_maps[idx], 0, indices)
             # min() because kappa=1 in the paper
+            # nearest_fmaps has the shape of 50
+            # fmap has shape of 1
+            # you do the normal allong channel 1
+
             s_map, _ = torch.min(
                 torch.linalg.norm(nearest_fmaps - fmap, dim=1), dim=0, keepdim=True
             )
+            # when you do the subtraction you get something like
+            # 50,56,56
+            # you return the smallested one in the 50
+            # indicating smallest distance
+            # you subtract both
+            # this is why you do the interpolation
+            # becuase you can go up to the iamge size
             scaled_s_map += torch.nn.functional.interpolate(
                 s_map.unsqueeze(0),
                 size=(self.image_size, self.image_size),
@@ -161,10 +227,11 @@ class SPADE(KNNExtractor):
             )
 
         scaled_s_map = self.blur(scaled_s_map)
-
         return z_score, scaled_s_map
 
     def get_parameters(self):
+        # this is the extra paramters of the method
+        # this way we can run the model and get the paramters if we want
         return super().get_parameters(
             {
                 "k": self.k,
@@ -178,6 +245,7 @@ class SPADE(KNNExtractor):
         tensor_x = torch.rand((1, 3, 224, 224), dtype=torch.float32)
         onnx_program = torch.onnx.dynamo_export(self, tensor_x)
         onnx_program.save(f"{EXPORT_DIR}/{save_name}.onnx")
+
 
 
 class PaDiM(KNNExtractor):
