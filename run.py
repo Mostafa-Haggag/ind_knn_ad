@@ -46,6 +46,7 @@ def run_model(method: str, classes: List[str], backbone: str):
 
         print(f"\n█│ Running {method} on {class_name} dataset.")
         print(f" ╰{'─'*(len(method)+len(class_name)+23)}\n")
+        # you are running for specific class name
         train_ds, test_ds = MVTecDataset(class_name).get_dataloaders()
 
         print("   Training ...")

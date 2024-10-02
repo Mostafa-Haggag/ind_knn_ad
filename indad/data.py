@@ -11,6 +11,7 @@ from torchvision import transforms
 from torchvision.datasets import ImageFolder
 
 DATASETS_PATH = Path("./datasets")
+# these are the means of imagenet
 IMAGENET_MEAN = tensor([0.485, 0.456, 0.406])
 IMAGENET_STD = tensor([0.229, 0.224, 0.225])
 
@@ -36,9 +37,12 @@ MVTEC_CLASSES = {
 class MVTecDataset:
     def __init__(self, class_name: str, size: int = 224):
         self.class_name = class_name
+        # you get a specific class
         self.size = size
         if class_name in MVTEC_CLASSES:
+            # check if it is inside, please please download it
             self._download(MVTEC_CLASSES[class_name])
+        # train dataset
         self.train_ds = MVTecTrainDataset(class_name, size)
         self.test_ds = MVTecTestDataset(class_name, size)
 
@@ -63,6 +67,9 @@ class MVTecDataset:
 
 
 class MVTecTrainDataset(ImageFolder):
+    # fakr imagefolder works in this way
+    #         root/dog/xxx.png
+    #         root/dog/xxy.png
     def __init__(self, class_name: str, size: int):
         super().__init__(
             root=DATASETS_PATH / class_name / "train",
@@ -79,7 +86,7 @@ class MVTecTrainDataset(ImageFolder):
         )
         self.class_name = class_name
         self.size = size
-
+        # you always do resize then center crop
 
 class MVTecTestDataset(ImageFolder):
     def __init__(self, class_name: str, size: int):
@@ -110,15 +117,21 @@ class MVTecTestDataset(ImageFolder):
 
     def __getitem__(self, index):
         path, _ = self.samples[index]
+        # when you set loader it bring back to you that image
         sample = self.loader(path)
 
         if "good" in path:
+            # the target is the gorund trueht heat map
             target = Image.new("L", (self.size, self.size))
+            # loading the image grey scale
+            # this is class 0
+            # good class
             sample_class = 0
         else:
             target_path = path.replace("test", "ground_truth")
             target_path = target_path.replace(".png", "_mask.png")
             target = self.loader(target_path)
+            # this is class 1
             sample_class = 1
 
         if self.transform is not None:
@@ -130,7 +143,8 @@ class MVTecTestDataset(ImageFolder):
 
 
 class StreamingDataset:
-    """This dataset is made specifically for the streamlit app."""
+    """This dataset is made specifically for the streamlit app.
+        we can ignore this dataset """
 
     def __init__(self, size: int = 224):
         self.size = size

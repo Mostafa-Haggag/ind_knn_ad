@@ -68,7 +68,9 @@ class KNNExtractor(torch.nn.Module):
         feature_maps = [fmap.to("cpu") for fmap in feature_maps]
         if self.pool is not None:
             # spit into fmaps and z
-            # x is the last one
+            # x is the last oneap
+            # fmaps contains everything up to last one
+            # last one you pass it by self.pool
             return feature_maps[:-1], self.pool(feature_maps[-1])
         else:
             return feature_maps
@@ -146,9 +148,11 @@ class SPADE(KNNExtractor):
         #
         for sample, _ in tqdm(train_dl, **get_tqdm_params()):
             feature_maps, z = self.extract(sample)
+            # you get the fucking feature maps for this current sample
             # this part after calling the child you get the Z
             # featureamaps is the heat map
             # z vector
+            # the average pooling
             self.z_lib.append(z)
             # added the paramter after the pooling
 
@@ -157,7 +161,9 @@ class SPADE(KNNExtractor):
                 # if we are in the first itersation
                 for fmap in feature_maps:
                     self.feature_maps.append([fmap])
+                    # putting it into a list
             else:
+                # indicating based on the idx the feature map
                 for idx, fmap in enumerate(feature_maps):
                     self.feature_maps[idx].append(fmap)
         # stacking very thing
@@ -171,6 +177,7 @@ class SPADE(KNNExtractor):
         # I need to understand what is difference between this and the fit function
 
         feature_maps, z = self.extract(sample)
+        # T
         # z is the averaged pooling
         # first feature map [1,256,56,56]
         # second feature map [1,512,28,28]
@@ -258,6 +265,8 @@ class PaDiM(KNNExtractor):
             backbone_name=backbone_name,
             out_indices=(1, 2, 3),
         )
+        # pool_last is set to none
+        # you donot return the adatpive average pooling
         self.image_size = 224
         self.d_reduced = d_reduced  # your RAM will thank you
         self.epsilon = 0.04  # cov regularization
@@ -265,22 +274,36 @@ class PaDiM(KNNExtractor):
         self.resize = None
 
     def fit(self, train_dl):
+        # this gets called first
         for sample, _ in tqdm(train_dl, **get_tqdm_params()):
             feature_maps = self.extract(sample)
+            # the extracted features maps
             if self.resize is None:
+                # this is set to none in first iteration
                 largest_fmap_size = feature_maps[0].shape[-2:]
+                # this is the largest feature map
+                # you are accessing the last 2 dimension indicated you are
+                # accessing the spatial dimension
                 self.resize = torch.nn.AdaptiveAvgPool2d(largest_fmap_size)
+                # using adptive average pooling with the size of largerest to resize
+            # you are resizing the feature maps with the largest one
             resized_maps = [self.resize(fmap) for fmap in feature_maps]
+            # you are concating all of them in the same place along channel dimenion
             self.patch_lib.append(torch.cat(resized_maps, 1))
+        # concating everything allong batch dimension
         self.patch_lib = torch.cat(self.patch_lib, 0)
 
         # random projection
+        # . We noticed that randomly selecting few dimensions is more efficient that
+        # a classic Principal Component Analysis (PCA) algorithm [
         if self.patch_lib.shape[1] > self.d_reduced:
             print(
                 f"   PaDiM: (randomly) reducing {self.patch_lib.shape[1]} dimensions to {self.d_reduced}."
             )
+            # you are throwing away some feature maps in here
             self.r_indices = torch.randperm(self.patch_lib.shape[1])[: self.d_reduced]
             self.patch_lib_reduced = self.patch_lib[:, self.r_indices, ...]
+            # extracting the reduced number of features.
         else:
             print(
                 "   PaDiM: d_reduced is higher than the actual number of dimensions, copying self.patch_lib ..."
@@ -288,11 +311,15 @@ class PaDiM(KNNExtractor):
             self.patch_lib_reduced = self.patch_lib
 
         # calcs
+        # calculate the mean along batch dimension
         self.means = torch.mean(self.patch_lib, dim=0, keepdim=True)
+        # getting the means for the reduced
         self.means_reduced = self.means[:, self.r_indices, ...]
         x_ = self.patch_lib_reduced - self.means_reduced
 
         # cov calc
+        # this is how we calcualte the converiance matrix
+
         self.E = (
             torch.einsum(
                 "abkl,bckl->ackl",
