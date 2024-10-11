@@ -268,10 +268,12 @@ class PaDiM(KNNExtractor):
         # pool_last is set to none
         # you donot return the adatpive average pooling
         self.image_size = 224
-        self.d_reduced = d_reduced  # your RAM will thank you
         self.epsilon = 0.04  # cov regularization
         self.patch_lib = []
         self.resize = None
+        # reduction parmas
+        self.d_reduced = d_reduced  # your RAM will thank you
+        self.r_indices = None  # this will get set in fit
 
     def fit(self, train_dl):
         # this gets called first
@@ -289,33 +291,41 @@ class PaDiM(KNNExtractor):
             # you are resizing the feature maps with the largest one
             resized_maps = [self.resize(fmap) for fmap in feature_maps]
             # you are concating all of them in the same place along channel dimenion
-            self.patch_lib.append(torch.cat(resized_maps, 1))
-        # concating everything allong batch dimension
+            resized_maps = torch.cat(resized_maps, 1)
+            if resized_maps.shape[1] > self.d_reduced:
+                if self.r_indices is None:
+                    self.r_indices = torch.randperm(resized_maps.shape[1])[:self.d_reduced]
+                resized_maps = resized_maps[:, self.r_indices, ...]
+                print(resized_maps.shape)
+            self.patch_lib.append(resized_maps)
+            # you concat everything alonmg the zero channel
         self.patch_lib = torch.cat(self.patch_lib, 0)
+        x_ = self.patch_lib - self.means
 
         # random projection
         # . We noticed that randomly selecting few dimensions is more efficient that
         # a classic Principal Component Analysis (PCA) algorithm [
-        if self.patch_lib.shape[1] > self.d_reduced:
-            print(
-                f"   PaDiM: (randomly) reducing {self.patch_lib.shape[1]} dimensions to {self.d_reduced}."
-            )
-            # you are throwing away some feature maps in here
-            self.r_indices = torch.randperm(self.patch_lib.shape[1])[: self.d_reduced]
-            self.patch_lib_reduced = self.patch_lib[:, self.r_indices, ...]
-            # extracting the reduced number of features.
-        else:
-            print(
-                "   PaDiM: d_reduced is higher than the actual number of dimensions, copying self.patch_lib ..."
-            )
-            self.patch_lib_reduced = self.patch_lib
+        # if self.patch_lib.shape[1] > self.d_reduced:
+        #     print(
+        #         f"   PaDiM: (randomly) reducing {self.patch_lib.shape[1]} dimensions to {self.d_reduced}."
+        #     )
+        #     # you are throwing away some feature maps in here
+        #     self.r_indices = torch.randperm(self.patch_lib.shape[1])[: self.d_reduced]
+        #     self.patch_lib_reduced = self.patch_lib[:, self.r_indices, ...]
+        #     # extracting the reduced number of features.
+        # else:
+        #     print(
+        #         "   PaDiM: d_reduced is higher than the actual number of dimensions, copying self.patch_lib ..."
+        #     )
+        #     self.patch_lib_reduced = self.patch_lib
 
         # calcs
         # calculate the mean along batch dimension
         self.means = torch.mean(self.patch_lib, dim=0, keepdim=True)
         # getting the means for the reduced
-        self.means_reduced = self.means[:, self.r_indices, ...]
-        x_ = self.patch_lib_reduced - self.means_reduced
+        # self.means_reduced = self.means[:, self.r_indices, ...]
+        # x_ = self.patch_lib_reduced - self.means_reduced
+        x_ = self.patch_lib - self.means
 
         # cov calc
         # this is how we calcualte the converiance matrix
@@ -340,7 +350,8 @@ class PaDiM(KNNExtractor):
         fmap = torch.cat(resized_maps, 1)
 
         # reduce
-        x_ = fmap[:, self.r_indices, ...] - self.means_reduced
+        # x_ = fmap[:, self.r_indices, ...] - self.means_reduced
+        x_ = fmap[:, self.r_indices, ...] - self.means
 
         left = torch.einsum("abkl,bckl->ackl", x_, self.E_inv)
         s_map = torch.sqrt(torch.einsum("abkl,abkl->akl", left, x_))
