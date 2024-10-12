@@ -63,6 +63,7 @@ class KNNExtractor(torch.nn.Module):
         :return:
         '''
         with torch.no_grad():
+            # you extract the feature maps
             feature_maps = self.feature_extractor(x.to(self.device))
         # loop over features map and set them to cpu
         feature_maps = [fmap.to("cpu") for fmap in feature_maps]
@@ -73,6 +74,7 @@ class KNNExtractor(torch.nn.Module):
             # last one you pass it by self.pool
             return feature_maps[:-1], self.pool(feature_maps[-1])
         else:
+            # this is used for PADIM
             return feature_maps
 
     def fit(self, _: DataLoader):
@@ -90,6 +92,7 @@ class KNNExtractor(torch.nn.Module):
 
         for sample, mask, label in tqdm(test_dl, **get_tqdm_params()):
             # This is the forward
+            # you are goign over the test
             z_score, fmap = self.forward(sample)
 
             image_preds.append(z_score.numpy()) # the last layer
@@ -264,7 +267,8 @@ class PaDiM(KNNExtractor):
         super().__init__(
             backbone_name=backbone_name,
             out_indices=(1, 2, 3),
-        )
+        )# self.pool is none so he isnot using the fucking
+        # adaptive pooling last layer
         # pool_last is set to none
         # you donot return the adatpive average pooling
         self.image_size = 224
@@ -279,14 +283,17 @@ class PaDiM(KNNExtractor):
         # this gets called first
         for sample, _ in tqdm(train_dl, **get_tqdm_params()):
             feature_maps = self.extract(sample)
+            # you are calling the extract method !!!
             # the extracted features maps
             if self.resize is None:
                 # this is set to none in first iteration
                 largest_fmap_size = feature_maps[0].shape[-2:]
-                # this is the largest feature map
+                # This is the first one
+                # this is the largest feature map you are getting spatial dimension whihc is 56 by 56
                 # you are accessing the last 2 dimension indicated you are
                 # accessing the spatial dimension
                 self.resize = torch.nn.AdaptiveAvgPool2d(largest_fmap_size)
+                # to know the size of the adaptive average pooling what doyou want to reach
                 # using adptive average pooling with the size of largerest to resize
             # you are resizing the feature maps with the largest one
             resized_maps = [self.resize(fmap) for fmap in feature_maps]
@@ -299,6 +306,15 @@ class PaDiM(KNNExtractor):
                 print(resized_maps.shape)
             self.patch_lib.append(resized_maps)
             # you concat everything alonmg the zero channel
+            # they all have the same size of the biggest dimension which is
+            #  1,256,56,56
+            # you are concate all the 3 dimension all long dim 1
+            # you have diffferent number of features maps
+            # they all have the same size
+            # due to the adaptive average pooling
+            self.patch_lib.append(torch.cat(resized_maps, 1))
+        # concating everything allong batch dimension
+        # so each teaching sample we have all this day
         self.patch_lib = torch.cat(self.patch_lib, 0)
         x_ = self.patch_lib - self.means
 
@@ -321,15 +337,32 @@ class PaDiM(KNNExtractor):
 
         # calcs
         # calculate the mean along batch dimension
+        # you have the size of batch size ,features ,56,56
+        # this is before the reduction
         self.means = torch.mean(self.patch_lib, dim=0, keepdim=True)
+        # The original feature maps capture all the information from the extracted features.
+        # By calculating the mean along the batch dimension, you're essentially creating a "reference"
+        # for the normal (or training) data distribution. This will later help to identify deviations
+        # from the normal distribution (i.e., anomalies).
+        #
         # getting the means for the reduced
         # self.means_reduced = self.means[:, self.r_indices, ...]
         # x_ = self.patch_lib_reduced - self.means_reduced
         x_ = self.patch_lib - self.means
 
         # cov calc
-        # this is how we calcualte the converiance matrix
-
+        # this is how we calcualte the converiance matrix???
+        # The covariance matrix captures the relationship between different features in the reduced space.
+        # It helps in understanding how different dimensions (features) of the data vary with each other.
+        # Center the data: Subtract the mean from the data to ensure it's centered.
+        # x_.permute([1, 0, 2, 3]): Transposes the first two dimensions of x_ so that the features
+        # (across channels) can be multiplied.
+        # torch.einsum("abkl,bckl->ackl", x_.permute([1, 0, 2, 3]), x_): This computes the outer product of
+        # the centered features, which is how covariance is typically calculated.
+        # The outer product represents the interaction between different dimensions (features),
+        # leading to a matrix of covariances.
+        #  The result is divided by the number of samples (self.patch_lib.shape[0] - 1)
+        #  to account for the degrees of freedom in the data.
         self.E = (
             torch.einsum(
                 "abkl,bckl->ackl",
@@ -339,10 +372,19 @@ class PaDiM(KNNExtractor):
             * 1
             / (self.patch_lib.shape[0] - 1)
         )
+        #
+        # self d reduction = 350
         self.E += self.epsilon * torch.eye(self.d_reduced).unsqueeze(-1).unsqueeze(-1)
+        # eye make matrix that has dignonal stuff only
+        # o avoid singularity (when the covariance matrix is not invertible), a small value (epsilon * torch.eye(self.d_reduced))
+        # is added to the diagonal elements of the covariance matrix. This ensures numerical stability.
+        # torch.Size([350, 350, 1, 1])
         self.E_inv = torch.linalg.inv(self.E.permute([2, 3, 0, 1])).permute(
             [2, 3, 0, 1]
         )
+        # Invert the covariance matrix: The inverse of the covariance matrix is often used in
+        # anomaly detection to measure how far a sample is from the normal distribution in a
+        # multivariate sense (e.g., using the Mahalanobis distance).
 
     def forward(self, sample):
         feature_maps = self.extract(sample)
@@ -353,6 +395,9 @@ class PaDiM(KNNExtractor):
         # x_ = fmap[:, self.r_indices, ...] - self.means_reduced
         x_ = fmap[:, self.r_indices, ...] - self.means
 
+        # we use the Mahalanobis distance [31] M (xij) to give an anomaly score to the patch in position
+        # (i, j) of a test image. M (xij) can be interpreted as the distance between the test
+        # patch embedding xij and learned distribution N (μij, Σij), where M (xij) is computed as follows:
         left = torch.einsum("abkl,bckl->ackl", x_, self.E_inv)
         s_map = torch.sqrt(torch.einsum("abkl,abkl->akl", left, x_))
         scaled_s_map = torch.nn.functional.interpolate(
