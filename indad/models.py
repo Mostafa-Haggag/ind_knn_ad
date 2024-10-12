@@ -257,7 +257,6 @@ class SPADE(KNNExtractor):
         onnx_program.save(f"{EXPORT_DIR}/{save_name}.onnx")
 
 
-
 class PaDiM(KNNExtractor):
     def __init__(
         self,
