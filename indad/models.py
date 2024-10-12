@@ -303,7 +303,7 @@ class PaDiM(KNNExtractor):
                 if self.r_indices is None:
                     self.r_indices = torch.randperm(resized_maps.shape[1])[:self.d_reduced]
                 resized_maps = resized_maps[:, self.r_indices, ...]
-                print(resized_maps.shape)
+                # print(resized_maps.shape)
             self.patch_lib.append(resized_maps)
             # you concat everything alonmg the zero channel
             # they all have the same size of the biggest dimension which is
@@ -312,28 +312,13 @@ class PaDiM(KNNExtractor):
             # you have diffferent number of features maps
             # they all have the same size
             # due to the adaptive average pooling
-            self.patch_lib.append(torch.cat(resized_maps, 1))
         # concating everything allong batch dimension
         # so each teaching sample we have all this day
         self.patch_lib = torch.cat(self.patch_lib, 0)
-        x_ = self.patch_lib - self.means
 
         # random projection
         # . We noticed that randomly selecting few dimensions is more efficient that
         # a classic Principal Component Analysis (PCA) algorithm [
-        # if self.patch_lib.shape[1] > self.d_reduced:
-        #     print(
-        #         f"   PaDiM: (randomly) reducing {self.patch_lib.shape[1]} dimensions to {self.d_reduced}."
-        #     )
-        #     # you are throwing away some feature maps in here
-        #     self.r_indices = torch.randperm(self.patch_lib.shape[1])[: self.d_reduced]
-        #     self.patch_lib_reduced = self.patch_lib[:, self.r_indices, ...]
-        #     # extracting the reduced number of features.
-        # else:
-        #     print(
-        #         "   PaDiM: d_reduced is higher than the actual number of dimensions, copying self.patch_lib ..."
-        #     )
-        #     self.patch_lib_reduced = self.patch_lib
 
         # calcs
         # calculate the mean along batch dimension
@@ -346,8 +331,6 @@ class PaDiM(KNNExtractor):
         # from the normal distribution (i.e., anomalies).
         #
         # getting the means for the reduced
-        # self.means_reduced = self.means[:, self.r_indices, ...]
-        # x_ = self.patch_lib_reduced - self.means_reduced
         x_ = self.patch_lib - self.means
 
         # cov calc
@@ -392,7 +375,6 @@ class PaDiM(KNNExtractor):
         fmap = torch.cat(resized_maps, 1)
 
         # reduce
-        # x_ = fmap[:, self.r_indices, ...] - self.means_reduced
         x_ = fmap[:, self.r_indices, ...] - self.means
 
         # we use the Mahalanobis distance [31] M (xij) to give an anomaly score to the patch in position
